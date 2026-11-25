@@ -1,10 +1,10 @@
 # HopShare
 
-HopShare is an Expo Go mobile app concept for ride-sharing and fare splitting. It helps people find nearby rides, share empty seats, and split the trip cost with others heading in the same direction.
+HopShare is an Expo Go mobile app concept for ride-sharing and fare splitting. It helps people find nearby rides, share empty seats, and split the trip cost with others heading in the same direction. The repository currently starts from Expo's blank TypeScript template so you can build the app step by step.
 
 ## Current app
 
-The starter app includes a polished ride discovery screen with sample Bengaluru trips, a route and time search card, per-person fare display, driver ratings and seats remaining, a simple join-seat interaction, and an **Offer a ride** view. The ride cards and savings are demo content stored locally in the app; there is no live matching, map, chat, authentication, or backend yet.
+The app currently shows a minimal HopShare placeholder screen. There is no ride matching, map, chat, authentication, or backend yet.
 
 ## Run with Expo Go
 
@@ -29,15 +29,13 @@ You can also use `npm start`, `npm run ios`, `npm run android`, or `npm run web`
 
 - React Native and Expo
 - TypeScript
-- Expo Router
+- Expo blank TypeScript template
 - Expo Go for on-device development
 
 ## Project structure
 
 ```text
-app/
-  _layout.tsx    Root navigation layout
-  index.tsx      HopShare ride discovery screen
+App.tsx          Main application component
 app.json         Expo app configuration
 ```
 
@@ -50,8 +48,6 @@ app.json         Expo app configuration
 
 Keep API keys and Firebase credentials out of source control. Configure provider restrictions and environment-specific settings before connecting live services.
 
-## Demo interactions
+## Start building
 
-- Switch between **Find a ride** and **Offer a ride**.
-- Tap **Join** on a ride to see the sample seat-request confirmation.
-- Search, profile, and bottom navigation controls currently show placeholder messages.
+Edit `App.tsx` to begin building the HopShare experience. Expo Go refreshes the app as you save changes.

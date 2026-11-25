@@ -2,14 +2,9 @@
   "expo": {
     "name": "HopShare",
     "slug": "hopshare",
-    "scheme": "hopshare",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "plugins": ["expo-router"],
-    "experiments": {
-      "typedRoutes": true
-    }
+    "newArchEnabled": true
   }
 }
