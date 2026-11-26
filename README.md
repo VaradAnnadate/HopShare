@@ -4,7 +4,7 @@ HopShare is an Expo Go mobile app concept for ride-sharing and fare splitting. I
 
 ## Current app
 
-The app currently shows a minimal HopShare placeholder screen. There is no ride matching, map, chat, authentication, or backend yet.
+The app includes the first rider search flow: editable pickup and destination, Today/Tomorrow selection, seat count controls, locally filtered sample rides, and a ride detail screen with driver information, route preview, trip estimates, and per-passenger fare. Search data is local demo content; the route preview is illustrative, and seat requests are not connected to a backend yet.
 
 ## Run with Expo Go
 
@@ -41,13 +41,16 @@ app.json         Expo app configuration
 
 ## Next development steps
 
-1. Add destination autocomplete and route previews with a map provider.
+1. Add destination autocomplete and real route previews with a map provider.
 2. Add Firebase Authentication and a Firestore data model for users, rides, ride requests, and messages.
-3. Implement ride creation, matching, seat availability, and fare splitting with server-side validation.
+3. Implement ride creation, persistent matching, seat availability, and fare splitting with server-side validation.
 4. Add trip chat, notifications, profile verification, and ride history.
 
 Keep API keys and Firebase credentials out of source control. Configure provider restrictions and environment-specific settings before connecting live services.
 
-## Start building
+## Current demo flow
 
-Edit `App.tsx` to begin building the HopShare experience. Expo Go refreshes the app as you save changes.
+- Edit the pickup and destination fields, choose Today or Tomorrow, and select the number of seats.
+- Tap **Find rides** to filter the sample ride list.
+- Tap a ride card to see route, driver, trip, and per-person fare details.
+- The map preview and seat request confirmation are placeholders; no live map, booking, or backend is configured.
