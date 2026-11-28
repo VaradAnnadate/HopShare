@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Keyboard,
@@ -12,12 +12,17 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import MapView, { Marker, Polyline } from 'react-native-maps';
+import type { User } from 'firebase/auth';
+import { auth, createRide, createUserWithEmailAndPassword, firebaseEnabled, requestRideSeat, signInWithEmailAndPassword, signOut, subscribeToRides } from './firebase';
+
+type RideDate = 'Today' | 'Tomorrow';
 
 type Ride = {
   id: string;
   from: string;
   to: string;
-  date: string;
+  date: RideDate;
   time: string;
   seats: number;
   capacity: number;
@@ -29,6 +34,7 @@ type Ride = {
   car: string;
   color: string;
   note: string;
+  cloud?: boolean;
 };
 
 const sampleRides: Ride[] = [
@@ -42,6 +48,33 @@ const sampleRides: Ride[] = [
 const green = '#277456';
 const ink = '#1B2B22';
 const muted = '#7B8780';
+
+const neighborhoodCoordinates: Record<string, { latitude: number; longitude: number }> = {
+  koramangala: { latitude: 12.9352, longitude: 77.6245 },
+  indiranagar: { latitude: 12.9784, longitude: 77.6408 },
+  'mg road': { latitude: 12.9756, longitude: 77.6068 },
+  'hsr layout': { latitude: 12.9116, longitude: 77.6474 },
+  whitefield: { latitude: 12.9698, longitude: 77.75 },
+  jayanagar: { latitude: 12.925, longitude: 77.5838 },
+};
+
+function pointFor(place: string) {
+  const match = Object.keys(neighborhoodCoordinates).find((key) => place.toLowerCase().includes(key));
+  return neighborhoodCoordinates[match ?? 'koramangala'];
+}
+
+function RouteMap({ from, to }: { from: string; to: string }) {
+  const start = pointFor(from);
+  const end = pointFor(to);
+  const center = { latitude: (start.latitude + end.latitude) / 2, longitude: (start.longitude + end.longitude) / 2 };
+  return <View style={styles.mapCard}>
+    <MapView style={StyleSheet.absoluteFill} initialRegion={{ ...center, latitudeDelta: Math.max(0.06, Math.abs(start.latitude - end.latitude) * 2.5), longitudeDelta: Math.max(0.06, Math.abs(start.longitude - end.longitude) * 2.5) }}>
+      <Marker coordinate={start} title={from} pinColor={green} /><Marker coordinate={end} title={to} pinColor="#E49A68" />
+      <Polyline coordinates={[start, end]} strokeColor={green} strokeWidth={4} />
+    </MapView>
+    <View pointerEvents="none" style={styles.mapCaption}><Text style={styles.mapCaptionText}>Approximate route preview</Text></View>
+  </View>;
+}
 
 function Field({ label, value, onChangeText, placeholder, marker }: {
   label: string; value: string; onChangeText: (value: string) => void; placeholder: string; marker: string;
@@ -118,6 +151,23 @@ export default function App() {
   const [offerDriver, setOfferDriver] = useState('Samira');
   const [bookings, setBookings] = useState<Record<string, number>>({});
   const [showRequestConfirmation, setShowRequestConfirmation] = useState(false);
+  const [requestRemaining, setRequestRemaining] = useState(0);
+  const [user, setUser] = useState<User | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'signIn' | 'signUp'>('signIn');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+
+  useEffect(() => {
+    if (!auth) return;
+    return auth.onAuthStateChanged(setUser);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeToRides((cloudRides) => setRides([...sampleRides, ...cloudRides]), (error) => Alert.alert('Ride sync error', error.message));
+  }, [user]);
 
   const matches = useMemo(() => {
     const start = pickup.trim().toLowerCase();
@@ -140,15 +190,60 @@ export default function App() {
     if (!Number.isInteger(capacity) || capacity < 1 || capacity > 7) return Alert.alert('Check available seats', 'Choose between 1 and 7 passenger seats.');
     if (!Number.isInteger(total) || total < 1 || total > 100000) return Alert.alert('Check the total fare', 'Enter a whole number fare between ₹1 and ₹100,000.');
     const ride: Ride = { id: `posted-${Date.now()}`, from: offerFrom.trim(), to: offerTo.trim(), date: offerDate, time: offerTime.trim(), seats: capacity, capacity, fare: total, distance: 'Route estimate pending', duration: 'Time estimate pending', driver: offerDriver.trim(), rating: 'New', car: 'Vehicle details not added', color: '#D7E8DC', note: 'New ride posted by the driver.' };
-    setRides((current) => [ride, ...current]); setPickup(ride.from); setDestination(ride.to); setDay(ride.date); setSeats(1); setSearchSubmitted(true); setActiveMode('find'); Keyboard.dismiss();
-    Alert.alert('Ride posted', `Your ride is listed. Estimated share: ₹${Math.ceil(total / capacity)} per passenger.`);
+    const saveRide = async () => {
+      if (firebaseEnabled && user) {
+        try {
+          await createRide(ride, user.uid);
+        } catch (error) {
+          Alert.alert('Could not post ride', error instanceof Error ? error.message : 'Try again.');
+          return;
+        }
+      } else setRides((current) => [ride, ...current]);
+      setPickup(ride.from); setDestination(ride.to); setDay(ride.date); setSeats(1); setSearchSubmitted(true); setActiveMode('find'); Keyboard.dismiss();
+      Alert.alert('Ride posted', `Your ride is listed. Estimated share: ₹${Math.ceil(total / capacity)} per passenger.`);
+    };
+    void saveRide();
   };
-  const requestSeat = () => {
+  const requestSeat = async () => {
     if (!selectedCurrentRide || selectedCurrentRide.seats < 1) return;
-    setRides((current) => current.map((ride) => ride.id === selectedCurrentRide.id ? { ...ride, seats: ride.seats - 1 } : ride));
+    if (firebaseEnabled && user && selectedCurrentRide.cloud) {
+      try { await requestRideSeat(selectedCurrentRide.id); }
+      catch (error) { Alert.alert('Could not request seat', error instanceof Error ? error.message : 'Try again.'); return; }
+    } else {
+      setRides((current) => current.map((ride) => ride.id === selectedCurrentRide.id ? { ...ride, seats: ride.seats - 1 } : ride));
+    }
+    setRequestRemaining(selectedCurrentRide.seats - 1);
     setBookings((current) => ({ ...current, [selectedCurrentRide.id]: (current[selectedCurrentRide.id] ?? 0) + 1 })); setShowRequestConfirmation(true);
   };
   const closeRequestConfirmation = () => { setShowRequestConfirmation(false); setSelectedRide(null); };
+
+  const submitAuth = async () => {
+    if (!firebaseEnabled || !auth) return Alert.alert('Firebase setup needed', 'Copy .env.example to .env and add your Firebase project web app values.');
+    if (!email.includes('@') || password.length < 6) return Alert.alert('Check your details', 'Enter a valid email and a password with at least 6 characters.');
+    setAuthBusy(true);
+    try {
+      if (authMode === 'signUp') await createUserWithEmailAndPassword(auth, email.trim(), password);
+      else await signInWithEmailAndPassword(auth, email.trim(), password);
+      setAccountOpen(false); setPassword('');
+    } catch (error) {
+      Alert.alert('Could not sign in', error instanceof Error ? error.message : 'Try again.');
+    } finally { setAuthBusy(false); }
+  };
+
+  if (accountOpen) {
+    return <SafeAreaView style={styles.safeArea}><StatusBar style="dark" /><ScrollView contentContainerStyle={styles.accountPage} keyboardShouldPersistTaps="handled">
+      <Pressable style={styles.backButton} onPress={() => setAccountOpen(false)}><Text style={styles.backText}>‹  Back to HopShare</Text></Pressable>
+      <Text style={styles.detailEyebrow}>YOUR ACCOUNT</Text><Text style={styles.detailTitle}>{user ? 'You’re signed in' : authMode === 'signIn' ? 'Welcome back' : 'Create your account'}</Text>
+      {user ? <><Text style={styles.accountEmail}>{user.email}</Text><Text style={styles.accountCopy}>Your posted rides and seat availability sync with Firebase.</Text><Pressable style={styles.searchButton} onPress={() => { if (auth) void signOut(auth); setAccountOpen(false); }}><Text style={styles.searchButtonText}>Sign out</Text></Pressable></> : <>
+        <Text style={styles.accountCopy}>{firebaseEnabled ? 'Sign in to sync rides across devices.' : 'Add Firebase project settings to enable account and cloud ride sync. Demo mode works without setup.'}</Text>
+        <FormInput label="EMAIL" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="default" />
+        <FormInput label="PASSWORD" value={password} onChangeText={setPassword} placeholder="At least 6 characters" keyboardType="default" />
+        <Pressable disabled={authBusy} style={[styles.searchButton, authBusy && styles.disabledButton]} onPress={() => void submitAuth()}><Text style={styles.searchButtonText}>{authBusy ? 'Please wait…' : authMode === 'signIn' ? 'Sign in' : 'Create account'}</Text></Pressable>
+        <Pressable style={styles.authToggle} onPress={() => setAuthMode(authMode === 'signIn' ? 'signUp' : 'signIn')}><Text style={styles.authToggleText}>{authMode === 'signIn' ? 'New to HopShare? Create an account' : 'Already have an account? Sign in'}</Text></Pressable>
+      </>}
+      <Text style={styles.demoNote}>Firebase email/password authentication · Expo Go</Text>
+    </ScrollView></SafeAreaView>;
+  }
 
   const search = () => {
     Keyboard.dismiss();
@@ -164,12 +259,7 @@ export default function App() {
           <Text style={styles.detailEyebrow}>RIDE DETAILS</Text>
           <Text style={styles.detailTitle}>{selectedCurrentRide.from} to {selectedCurrentRide.to}</Text>
           <Text style={styles.detailSubtitle}>{selectedCurrentRide.date} · {selectedCurrentRide.time}</Text>
-          <View style={styles.mapCard}>
-            <View style={styles.mapCircleOne} /><View style={styles.mapCircleTwo} />
-            <View style={styles.mapRoute}><View style={styles.mapStart} /><View style={styles.mapEnd} /></View>
-            <Text style={styles.mapLabelStart}>{selectedCurrentRide.from}</Text><Text style={styles.mapLabelEnd}>{selectedCurrentRide.to}</Text>
-            <Text style={styles.mapPlaceholder}>ROUTE PREVIEW</Text>
-          </View>
+          <RouteMap from={selectedCurrentRide.from} to={selectedCurrentRide.to} />
           <View style={styles.infoCard}>
             <Text style={styles.infoHeading}>Your trip</Text>
             <View style={styles.infoRow}><Text style={styles.infoLabel}>Distance</Text><Text style={styles.infoValue}>{selectedCurrentRide.distance}</Text></View>
@@ -193,7 +283,7 @@ export default function App() {
           <Pressable disabled={selectedCurrentRide.seats < 1} style={[styles.requestButton, selectedCurrentRide.seats < 1 && styles.disabledButton]} onPress={requestSeat}><Text style={styles.requestButtonText}>{selectedCurrentRide.seats < 1 ? 'Ride full' : `Request a seat · ₹${Math.ceil(selectedCurrentRide.fare / selectedCurrentRide.capacity)}`}</Text></Pressable>
           <Text style={styles.demoNote}>{bookings[selectedCurrentRide.id] ? `You requested ${bookings[selectedCurrentRide.id]} seat(s) · demo only` : 'Demo booking · no payment or driver notification'}</Text>
         </ScrollView>
-        <Modal transparent visible={showRequestConfirmation} animationType="fade" onRequestClose={closeRequestConfirmation}><View style={styles.modalBackdrop}><View style={styles.modalCard}><Text style={styles.successMark}>✓</Text><Text style={styles.modalTitle}>Seat requested</Text><Text style={styles.modalMessage}>Your request is saved in this demo. {selectedCurrentRide.seats - 1} seat(s) remain.</Text><Pressable style={styles.requestButton} onPress={closeRequestConfirmation}><Text style={styles.requestButtonText}>Done</Text></Pressable></View></View></Modal>
+        <Modal transparent visible={showRequestConfirmation} animationType="fade" onRequestClose={closeRequestConfirmation}><View style={styles.modalBackdrop}><View style={styles.modalCard}><Text style={styles.successMark}>✓</Text><Text style={styles.modalTitle}>Seat requested</Text><Text style={styles.modalMessage}>Your request is saved. {requestRemaining} seat(s) remain.</Text><Pressable style={styles.requestButton} onPress={closeRequestConfirmation}><Text style={styles.requestButtonText}>Done</Text></Pressable></View></View></Modal>
       </SafeAreaView>
     );
   }
@@ -204,7 +294,7 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <View><Text style={styles.brand}>hopshare<Text style={styles.brandDot}>.</Text></Text><Text style={styles.headerSub}>Find a better way there.</Text></View>
-          <View style={styles.headerIcon}><Text style={styles.headerIconText}>↗</Text></View>
+          <Pressable style={styles.headerIcon} onPress={() => setAccountOpen(true)}><Text style={styles.headerIconText}>{user ? '●' : '♙'}</Text></Pressable>
         </View>
         <View style={styles.intro}><Text style={styles.eyebrow}>{activeMode === 'find' ? 'SHARE THE ROAD' : 'DRIVE TOGETHER'}</Text><Text style={styles.title}>{activeMode === 'find' ? 'Where to today?' : 'Offer a ride'}</Text><Text style={styles.subtitle}>{activeMode === 'find' ? 'Find a ride and split the fare.' : 'Share your route and split the cost.'}</Text></View>
         <View style={styles.modeSwitch}><Pressable onPress={() => setActiveMode('find')} style={[styles.modeButton, activeMode === 'find' && styles.modeButtonActive]}><Text style={[styles.modeText, activeMode === 'find' && styles.modeTextActive]}>Find a ride</Text></Pressable><Pressable onPress={() => setActiveMode('offer')} style={[styles.modeButton, activeMode === 'offer' && styles.modeButtonActive]}><Text style={[styles.modeText, activeMode === 'offer' && styles.modeTextActive]}>Offer a ride</Text></Pressable></View>
@@ -261,7 +351,7 @@ const styles = StyleSheet.create({
   headerIconText: { color: green, fontSize: 19, fontWeight: '600' },
   intro: { marginBottom: 17 },
   eyebrow: { color: green, fontSize: 9, fontWeight: '800', letterSpacing: 1.5 },
-  title: { color: ink, fontSize: 29, fontWeight: '750', letterSpacing: -1, marginTop: 6 },
+  title: { color: ink, fontSize: 29, fontWeight: '700', letterSpacing: -1, marginTop: 6 },
   subtitle: { color: muted, fontSize: 12, marginTop: 4 },
   searchCard: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 15, borderWidth: 1, borderColor: '#E9EEE8', shadowColor: '#20382A', shadowOpacity: 0.04, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   modeSwitch: { flexDirection: 'row', backgroundColor: '#E9EEE8', borderRadius: 11, padding: 3, marginBottom: 14 },
@@ -309,7 +399,7 @@ const styles = StyleSheet.create({
   place: { color: '#35433A', fontSize: 11, fontWeight: '600' },
   destination: { color: '#68756D' },
   fareColumn: { alignItems: 'flex-end' },
-  fare: { color: ink, fontSize: 17, fontWeight: '750' },
+  fare: { color: ink, fontSize: 17, fontWeight: '700' },
   perPerson: { color: '#929C95', fontSize: 8, marginTop: 1 },
   cardBottom: { flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderColor: '#F0F2EE', marginTop: 12, paddingTop: 11 },
   avatar: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
@@ -329,9 +419,11 @@ const styles = StyleSheet.create({
   backButton: { alignSelf: 'flex-start', paddingVertical: 9, paddingRight: 10 },
   backText: { color: green, fontSize: 11, fontWeight: '700' },
   detailEyebrow: { color: green, fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginTop: 18 },
-  detailTitle: { color: ink, fontSize: 25, lineHeight: 31, fontWeight: '750', letterSpacing: -0.8, marginTop: 6 },
+  detailTitle: { color: ink, fontSize: 25, lineHeight: 31, fontWeight: '700', letterSpacing: -0.8, marginTop: 6 },
   detailSubtitle: { color: muted, fontSize: 11, marginTop: 4, marginBottom: 16 },
-  mapCard: { height: 178, backgroundColor: '#E5EEE5', borderRadius: 18, overflow: 'hidden', marginBottom: 13, justifyContent: 'center' },
+  mapCard: { height: 178, backgroundColor: '#E5EEE5', borderRadius: 18, overflow: 'hidden', marginBottom: 13 },
+  mapCaption: { position: 'absolute', bottom: 8, alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.9)', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 10 },
+  mapCaptionText: { color: '#526158', fontSize: 8, fontWeight: '600' },
   mapCircleOne: { position: 'absolute', width: 210, height: 210, borderRadius: 110, borderWidth: 1, borderColor: '#D2E2D3', left: -50, top: -90 },
   mapCircleTwo: { position: 'absolute', width: 230, height: 230, borderRadius: 120, borderWidth: 1, borderColor: '#D2E2D3', right: -60, bottom: -150 },
   mapRoute: { position: 'absolute', left: '22%', right: '22%', top: '48%', height: 3, backgroundColor: '#7AA58A', transform: [{ rotate: '-17deg' }] },
@@ -346,7 +438,7 @@ const styles = StyleSheet.create({
   infoLabel: { color: muted, fontSize: 10 },
   infoValue: { color: '#425047', fontSize: 10, fontWeight: '600' },
   infoDivider: { height: 1, backgroundColor: '#EFF2EE', marginVertical: 8 },
-  detailFare: { color: green, fontSize: 17, fontWeight: '750' },
+  detailFare: { color: green, fontSize: 17, fontWeight: '700' },
   splitNote: { color: '#9AA39C', fontSize: 8, textAlign: 'right', marginTop: -1 },
   driverProfile: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   largeAvatar: { width: 42, height: 42, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
@@ -362,6 +454,11 @@ const styles = StyleSheet.create({
   successMark: { width: 43, height: 43, borderRadius: 15, overflow: 'hidden', textAlign: 'center', textAlignVertical: 'center', color: green, backgroundColor: '#EAF3ED', fontSize: 22, fontWeight: '700' },
   modalTitle: { color: ink, fontSize: 17, fontWeight: '700', marginTop: 13 },
   modalMessage: { color: muted, fontSize: 11, lineHeight: 17, textAlign: 'center', marginVertical: 9 },
+  accountPage: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 20, paddingBottom: 30 },
+  accountEmail: { color: green, fontSize: 13, marginTop: 10 },
+  accountCopy: { color: muted, fontSize: 11, lineHeight: 17, marginTop: 10, marginBottom: 10 },
+  authToggle: { paddingVertical: 16, alignItems: 'center' },
+  authToggleText: { color: green, fontSize: 10, fontWeight: '700' },
 });
 
 function FormInput({ label, value, onChangeText, placeholder, keyboardType }: { label: string; value: string; onChangeText: (value: string) => void; placeholder: string; keyboardType: 'default' | 'number-pad' }) {

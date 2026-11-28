@@ -4,7 +4,7 @@ HopShare is an Expo Go mobile app concept for ride-sharing and fare splitting. I
 
 ## Current app
 
-The app includes rider search and ride details, plus a driver form to post a ride with route, day, time, available passenger seats, driver name, and total fare. Posted rides appear in search during the current app session. Ride details show total fare, seat capacity, and the estimated share per passenger. Requesting a seat decrements availability and updates the list. All data is local in-memory demo state and resets when the app restarts; there is no payment, driver notification, or backend persistence.
+The app includes rider search and ride details, a driver ride-posting form, fare splitting, and seat requests. Ride details include an Expo Go map with approximate Bengaluru pickup/drop-off markers and a straight-line route preview. Firebase email/password authentication and Firestore ride syncing are included but require project configuration. Without Firebase credentials, the app stays in local demo mode.
 
 ## Run with Expo Go
 
@@ -37,7 +37,20 @@ You can also use `npm start`, `npm run ios`, `npm run android`, or `npm run web`
 ```text
 App.tsx          Main application component
 app.json         Expo app configuration
+firebase.ts      Optional Firebase Auth and Firestore setup
+firestore.rules  Starter Firestore access rules
 ```
+
+## Enable Firebase
+
+1. Create a Firebase project and register a **Web app** to get its Firebase configuration values.
+2. In Firebase Authentication, enable the **Email/Password** provider.
+3. Create a Firestore database.
+4. Copy `.env.example` to `.env` and fill in the values from your Firebase Web app configuration. The `.env` file is ignored by Git.
+5. Publish the rules in `firestore.rules` to the project's Firestore database.
+6. Restart Expo with `npx expo start --clear`.
+
+The signed-in app listens to the `rides` collection, saves posted rides there, and decrements cloud ride seat counts in a Firestore transaction. Sample rides remain local demo examples. Firebase's client configuration is included in the app bundle; enforce access through Firebase Authentication and Firestore rules, and never put service account credentials in the app.
 
 ## Next development steps
 
@@ -53,6 +66,8 @@ Keep API keys and Firebase credentials out of source control. Configure provider
 - Edit the pickup and destination fields, choose Today or Tomorrow, and select the number of seats.
 - Tap **Find rides** to filter the sample ride list.
 - Tap a ride card to see route, driver, trip, and per-person fare details.
-- Use **Offer a ride** to create a ride, then find it in the rider list during the same app session.
+- Open the profile icon to create an account or sign in. Without Firebase setup, the screen explains the configuration needed.
+- Use **Offer a ride** to create a ride, then find it in the rider list. Signed-in rides sync through Firestore; demo rides stay local.
 - Ride fares are split across the listed passenger seat capacity, rounding shares up to a whole rupee.
-- Seat requests decrement available seats locally. The route preview is illustrative; no live map, payment, driver notification, or backend is configured.
+- Seat requests decrement available seats locally in demo mode and transactionally in Firestore for cloud rides.
+- The map displays approximate neighborhood coordinates and a straight line, not turn-by-turn directions. No payment or driver notification is configured.
